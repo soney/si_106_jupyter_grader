@@ -5,6 +5,7 @@ import pathlib
 import nbformat
 from nbclient import NotebookClient
 from nbclient.exceptions import CellExecutionError
+from enum import Enum
 
 current_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -122,3 +123,186 @@ def processCSV(csv_path, relative_path, source_notebook_path):
         pathlib.Path(os.path.join(relative_path, 'problems')).mkdir(parents=True, exist_ok=True)
         nbformat.write(notebook, os.path.join(relative_path, 'problems', '{}.ipynb'.format(problem_id)))
         
+directivePrefix = '..'
+
+def processGradedProblems(csv_path, relative_path, problems_path, output_path):
+    student_grades = {}
+    full_problems_path = os.path.join(relative_path, problems_path)
+    problems_files = os.listdir(full_problems_path)
+    for problem_file in problems_files:
+        if os.path.isdir(problem_file): continue
+        fullpath = os.path.join(full_problems_path, problem_file)
+        nb = nbformat.read(fullpath, as_version=4)
+        problem_id = problem_file.split(".")[0]
+        for cell in nb.cells:
+            try:
+                directive,source = splitDirective(cell['cell_type'], cell['source'])
+            except Exception as e:
+                print('problem in file {}'.format(problem_file))
+                print(e)
+                print()
+            if directive:
+                directive_type = directive['type']
+                if directive_type == ExamDirectiveType.GRADE:
+                    if source.strip():
+                        student = directive['student-id']
+                        try:
+                            value = float(source)
+                            if value.is_integer():
+                                value = int(value)
+                            if student not in student_grades:
+                                student_grades[student] = {
+                                    'problems': {}
+                                }
+                            if problem_id not in student_grades[student]['problems']:
+                                student_grades[student]['problems'][problem_id] = {}
+                            student_grades[student]['problems'][problem_id]['grade'] = value
+                        except Exception as e:
+                            print('Problem in file {} for student {}'.format(problem_file, student))
+                            print(e)
+                            print()
+                            continue
+                elif directive_type == ExamDirectiveType.COMMENTS:
+                    student = directive['student-id']
+                    if source.strip():
+                        if student not in student_grades:
+                            student_grades[student] = {
+                                'problems': {}
+                            }
+                        if problem_id not in student_grades[student]['problems']:
+                            student_grades[student]['problems'][problem_id] = {}
+                        student_grades[student]['problems'][problem_id]['comments'] = source.strip()
+    output_rows = []
+    full_csv_path = os.path.join(relative_path, csv_path)
+    with open(full_csv_path) as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            sid = row['uniquename']
+            if sid in student_grades:
+                submission_file_path = os.path.join(relative_path, row['submission'])
+                submission = nbformat.read(submission_file_path, as_version=4)
+                problems = submission.metadata['exam_gen_problems']
+                grades = student_grades[sid]['problems']
+                feedback = []
+                overallGrade = 0
+                for index,problem in enumerate(problems):
+                    if problem in grades:
+                        grade = grades[problem]
+                        if 'grade' in grade:
+                            gradeValue = grade['grade']
+                            overallGrade += gradeValue
+
+                            if 'comments' in grade:
+                                gradeComments = grade['comments']
+                                feedback.append('Problem {}: {} points\n{}'.format(index, gradeValue, gradeComments))
+                            elif gradeValue:
+                                feedback.append('Problem {}: {} points'.format(index, gradeValue))
+                            feedback.append('')
+                        else:
+                            print('No grade for {} (problem {})'.format(sid, problem))
+                    else:
+                        if index > 0 and index <= 23:
+                            print('Missing grade for {} for problem {}'.format(sid, problem))
+                output_rows.append({
+                    'uniquename': sid,
+                    'grade': overallGrade,
+                    'feedback': '\n'.join(feedback)
+                })
+    output_rows.sort(key = lambda d: d['uniquename'])
+    full_output_path = os.path.join(relative_path, output_path)
+
+    with open(full_output_path, 'w') as csvfile:
+        fieldnames=['uniquename', 'grade', 'feedback']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in output_rows:
+            writer.writerow(row)
+
+    print('wrote {}'.format(full_output_path))
+    # print(student_grades)
+    #     first_cell_source = nb.cells[0].source
+    #     line = first_cell_source.splitlines()[3]
+    #     print(line)
+    #     m = re.findall("This exam is for .* \((.*)\)\.", line)
+    #     if m:
+    #         m = m[0]
+    #         os.rename(fullpath, os.path.join(rp, '{}_final_exam.ipynb'.format(m)))
+
+class ExamDirectiveType(Enum):
+    ALWAYS_INCLUDE = '*'
+    PROBLEM = 'problem'
+    TEST = 'test'
+    EXAMS = 'exams'
+    SOLUTION = 'solution'
+    GRADE='grade'
+    COMMENTS='comments'
+
+def splitDirective(cellType, source):
+    if cellType == 'markdown':
+        if source[0:len(directivePrefix)] == directivePrefix:
+            lines = source.splitlines()
+            directive = parseDirective(lines[0].strip())
+
+            newSource = os.linesep.join(lines[1:]).lstrip()
+            return (directive, newSource)
+    elif cellType == 'code':
+        if source[0:len(directivePrefix)+1] == '#'+directivePrefix:
+            lines = source.splitlines()
+            directive = parseDirective(lines[0][1:].strip())
+
+            newSource = os.linesep.join(lines[1:]).lstrip()
+            return (directive, newSource)
+
+
+    return (False, source)
+def parseDirective(fullDirective):
+    directive = fullDirective[len(directivePrefix):]
+    splitDirective = directive.split()
+
+    if splitDirective[0] == '*':
+        return {
+            'type': ExamDirectiveType.ALWAYS_INCLUDE
+        }
+    elif splitDirective[0].lower() == 'test':
+        visible = True
+        if len(splitDirective) >= 2:
+            visible = splitDirective[1].lower() != 'hidden'
+
+        return {
+            'type': ExamDirectiveType.TEST,
+            'visible': visible
+        }
+    elif splitDirective[0].lower() == 'problem':
+        directiveType = ExamDirectiveType.PROBLEM
+
+        [problemGroup, problemID] = splitDirective[1].split('.')
+        if len(splitDirective) >= 3:
+            points = int(splitDirective[2])
+        else:
+            points = False
+        return {
+            'type': ExamDirectiveType.PROBLEM,
+            'group': problemGroup,
+            'id': problemID,
+            'points': points
+        }
+    elif splitDirective[0].lower() == 'exams':
+        return {
+            'type': ExamDirectiveType.EXAMS
+        }
+    elif splitDirective[0].lower() == 'solution':
+        return {
+            'type': ExamDirectiveType.SOLUTION
+        }
+    elif splitDirective[0].lower() == 'grade':
+        return {
+            'type': ExamDirectiveType.GRADE,
+            'student-id': splitDirective[1]
+        }
+    elif splitDirective[0].lower() == 'comments':
+        return {
+            'type': ExamDirectiveType.COMMENTS,
+            'student-id': splitDirective[1]
+        }
+    else:
+        raise ValueError('Unknown directive "{}"'.format(splitDirective[0]))
