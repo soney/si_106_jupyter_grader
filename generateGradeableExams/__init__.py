@@ -30,6 +30,8 @@ def handleSubmissions(filenames, students, source_path, output_path):
     for problemID in allProblems:
         problemNotebook = nbformat.v4.new_notebook()
 
+        problemNotebook['metadata']['problemID'] = problemID
+
         sourceNotebookProblemCells = getNotebookProblemCells(problemID, sourceNotebook, sourceNotebookProblemIDs, True)
         testCells = getTestCells(problemID, sourceNotebook)
         solutionCells = getSolutionCells(problemID, sourceNotebook)
@@ -48,7 +50,7 @@ def handleSubmissions(filenames, students, source_path, output_path):
 
             toAddForStudent += generateStudentProblemNotebookFooters(student, problemID, 'TODO')
 
-            for cell in studentCells:
+            for cell in toAddForStudent:
                 cell['metadata']['studentID'] = studentID
             
             problemNotebook.cells += toAddForStudent
@@ -57,12 +59,58 @@ def handleSubmissions(filenames, students, source_path, output_path):
         # print([type(c) for c in problemNotebook.cells])
         fullNotebookPath = os.path.join(output_path, 'problems', '{}.ipynb'.format(problemID))
 
-        executeNotebook(problemNotebook)
+        autoGradeTestedCells(problemNotebook)
 
         pathlib.Path(os.path.join(output_path, 'problems')).mkdir(parents=True, exist_ok=True)
         nbformat.write(problemNotebook, fullNotebookPath)
 
         print('Wrote {}'.format(fullNotebookPath))
+    
+def autoGradeTestedCells(nb):
+    client = NotebookClient(nb, timeout=600, kernel_name='python3')
+    client.setup_kernel()
+    failedTests = {}
+    passedAllTests = {}
+
+    with client.setup_kernel():
+        index = 0
+        while index < len(nb.cells):
+            cell = nb.cells[index]
+            directive, source = splitDirective(cell['cell_type'], cell['source'])
+            metadata = cell['metadata']
+            studentID = metadata['studentID'] if ('studentID' in metadata) else None
+            isTest = hasDirectiveType(cell, ExamDirectiveType.TEST)
+            failedTest = False
+            if cell['cell_type'] == 'code':
+                try:
+                    result = client.execute_cell(cell, index)
+                    outputs = result['outputs']
+                except CellExecutionError as e:
+                    if isTest:
+                        failedTest = True
+                    pass
+
+                    # print(e)
+            if isTest:
+                if failedTest:
+                    failedTests[studentID] = True
+                    if studentID in passedAllTests:
+                        del passedAllTests[studentID]
+                elif not failedTests.get(studentID, False):
+                    passedAllTests[studentID] = True
+            
+            if hasDirectiveType(cell, ExamDirectiveType.GRADE):
+                # print('grade', passedAllTests.get(studentID, False), failedTests.get(studentID, False))
+                if passedAllTests.get(studentID, False):
+                    cell['source'] = cell['source'].replace('TODO', '100')
+                elif failedTests.get(studentID, False):
+                    cell['source'] = cell['source'].replace('TODO', '0')
+            elif hasDirectiveType(cell, ExamDirectiveType.COMMENTS):
+                if passedAllTests.get(studentID, False) or failedTests.get(studentID, False):
+                    cell['source'] += '\nAutograded'.replace('TODO', '100')
+                
+            index += 1
+        client.km.shutdown_kernel()
 
 def removeProblemDescriptionCell(problemID, cells):
     result = []
@@ -132,7 +180,6 @@ def getTestCells(problemID, sourceNotebook):
 
 def getSolutionCells(problemID, sourceNotebook):
     return getCellsWithDirective(problemID, sourceNotebook, ExamDirectiveType.SOLUTION)
-
 
 def getSourceNotebookProblemIDs(sourceNotebook):
     return [ cell['metadata']['id'] for cell in sourceNotebook['cells'] if hasDirectiveType(cell, ExamDirectiveType.PROBLEM)]
