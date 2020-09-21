@@ -6,17 +6,165 @@ import nbformat
 from nbclient import NotebookClient
 from nbclient.exceptions import CellExecutionError
 from enum import Enum
+import uuid
+from parseExamDirective import ExamDirectiveType, splitDirective, parseDirective
+
+def handleSubmissions(filenames, students, source_path, output_path):
+    allProblems = {}
+    for studentID, filename in filenames.items():
+        if studentID not in students:
+            print('Skipping unknown student with ID {}'.format(studentID))
+            continue
+
+        submissionNotebook = getNotebook(filename)
+        problemIDs = getProblemIDs(submissionNotebook)
+
+        for problemID in problemIDs:
+            if problemID not in allProblems:
+                allProblems[problemID] = {}
+            allProblems[problemID][studentID] = getNotebookProblemCells(problemID, submissionNotebook, problemIDs)
+
+    sourceNotebook = getNotebook(source_path)
+    sourceNotebookProblemIDs = getSourceNotebookProblemIDs(sourceNotebook)
+
+    for problemID in allProblems:
+        problemNotebook = nbformat.v4.new_notebook()
+
+        sourceNotebookProblemCells = getNotebookProblemCells(problemID, sourceNotebook, sourceNotebookProblemIDs, True)
+        testCells = getTestCells(problemID, sourceNotebook)
+        solutionCells = getSolutionCells(problemID, sourceNotebook)
+
+        problemNotebook.cells += generateProblemNotebookHeaders(problemID, solutionCells, [sourceNotebookProblemCells[0]])
+
+        # print('PROBLEM {}'.format(problemID))
+        for studentID, studentCells in sorted(allProblems[problemID].items(), key = lambda x: students[x[0]]['SIS Login ID']):
+            student = students[studentID]
+            # print('\tstudent {}'.format(student['Student']))
+
+            toAddForStudent = []
+            toAddForStudent += generateStudentProblemNotebookHeaders(student, problemID)
+            toAddForStudent += removeProblemDescriptionCell(problemID, getNonTestCells(studentCells, testCells))
+            toAddForStudent += [cloneCell(cell) for cell in testCells]
+
+            toAddForStudent += generateStudentProblemNotebookFooters(student, problemID, 'TODO')
+
+            for cell in studentCells:
+                cell['metadata']['studentID'] = studentID
+            
+            problemNotebook.cells += toAddForStudent
+        
+
+        # print([type(c) for c in problemNotebook.cells])
+        fullNotebookPath = os.path.join(output_path, 'problems', '{}.ipynb'.format(problemID))
+
+        executeNotebook(problemNotebook)
+
+        pathlib.Path(os.path.join(output_path, 'problems')).mkdir(parents=True, exist_ok=True)
+        nbformat.write(problemNotebook, fullNotebookPath)
+
+        print('Wrote {}'.format(fullNotebookPath))
+
+def removeProblemDescriptionCell(problemID, cells):
+    result = []
+    for cell in cells:
+        cellMetadata = cell['metadata']
+        cellSourceID = cellMetadata['source-id'] if 'source-id' in cellMetadata else None
+        if cellSourceID != problemID:
+            result.append(cell)
+
+    return result
+
+
+def getNonTestCells(studentCells, sourceNotebookTestCells):
+    result = []
+    sourceNotebookTestCellIDs = [cell['metadata']['id'] for cell in sourceNotebookTestCells]
+    for cell in studentCells:
+        cellMetadata = cell['metadata']
+        cellSourceID = cellMetadata['source-id'] if 'source-id' in cellMetadata else None
+        if cellSourceID not in sourceNotebookTestCellIDs:
+            result.append(cell)
+
+    return result
+
+
+def generateProblemNotebookHeaders(problemID, solutionCells, extraCells=[]):
+    cells = []
+    cells += [ nbformat.v4.new_markdown_cell('# {}'.format(problemID)) ]
+    cells += extraCells
+    cells += [ nbformat.v4.new_markdown_cell('## Sample Solution:') ]
+    cells += solutionCells
+    cells += [ nbformat.v4.new_markdown_cell('---\n---\n---\n\n') ]
+
+    return cells
+
+def generateStudentProblemNotebookHeaders(student, problemID):
+    return [ nbformat.v4.new_markdown_cell('# {}'.format(student['SIS Login ID'])) ]
+
+def generateStudentProblemNotebookFooters(student, problemID, presetScore):
+    sid = student['SIS Login ID']
+
+    gradeCell = nbformat.v4.new_markdown_cell('..grade {}\n\n{}'.format(sid, presetScore))
+    commentsCell = nbformat.v4.new_markdown_cell('..comments {}\n\n'.format(sid))
+
+    return [ gradeCell, commentsCell, nbformat.v4.new_markdown_cell('---\n'*2) ]
+
+def cloneCell(cell):
+    return nbformat.notebooknode.NotebookNode(
+        cell_type = cell['cell_type'],
+        source = cell['source'],
+        metadata = nbformat.notebooknode.NotebookNode(cell['metadata'])
+    )
 
 current_path = os.path.dirname(os.path.realpath(__file__))
+
+def hasDirectiveType(cell, desiredDirectiveType):
+    directive, source = splitDirective(cell['cell_type'], cell['source'])
+    directiveType = directive['type'] if directive else None
+    return directiveType == desiredDirectiveType
+
+def getCellsWithDirective(problemID, sourceNotebook, directiveType):
+    allProblemIDs = getSourceNotebookProblemIDs(sourceNotebook)
+    problemCells = getNotebookProblemCells(problemID, sourceNotebook, allProblemIDs, True)
+    return [cell for cell in problemCells if hasDirectiveType(cell, directiveType)]
+
+def getTestCells(problemID, sourceNotebook):
+    return getCellsWithDirective(problemID, sourceNotebook, ExamDirectiveType.TEST)
+
+def getSolutionCells(problemID, sourceNotebook):
+    return getCellsWithDirective(problemID, sourceNotebook, ExamDirectiveType.SOLUTION)
+
+
+def getSourceNotebookProblemIDs(sourceNotebook):
+    return [ cell['metadata']['id'] for cell in sourceNotebook['cells'] if hasDirectiveType(cell, ExamDirectiveType.PROBLEM)]
+
+def getNotebookProblemCells(problemID, notebook, allProblemIDs, isSourceNotebook=False):
+    includedCells = []
+    isPartOfProblem = False
+    for cell in notebook['cells']:
+        cellMetadata = cell['metadata']
+        cellID = cellMetadata['id'] if 'id' in cellMetadata else None
+        cellSourceID = cellID if isSourceNotebook else (cellMetadata['source-id'] if 'source-id' in cellMetadata else None)
+
+        if cellSourceID == problemID:
+            isPartOfProblem = True
+        elif isPartOfProblem and (cellSourceID in allProblemIDs):
+            isPartOfProblem = False
+            break
+        
+        if isPartOfProblem:
+            includedCells.append(cell)
+
+    return includedCells
+
+
+def getProblemIDs(notebook):
+    return notebook['metadata']['exam_gen_problems']
 
 def readNotebooks(paths):
     for path in paths:
         readNotebook(path)
 
-def readNotebook(path):
-    # with open(path, 'r') as f:
-
-    nb = nbformat.read(path, as_version=4)
+def executeNotebook(nb):
     client = NotebookClient(nb, timeout=600, kernel_name='python3')
     client.setup_kernel()
 
@@ -26,12 +174,13 @@ def readNotebook(path):
                 try:
                     result = client.execute_cell(cell, index)
                     outputs = result['outputs']
-                    print(outputs)
                 except CellExecutionError as e:
-                    print('error')
+                    pass
                     # print(e)
         client.km.shutdown_kernel()
 
+def getNotebook(path):
+    return nbformat.read(path, as_version=4)
 
 
 def processCSV(csv_path, relative_path, source_notebook_path):
@@ -126,6 +275,7 @@ def processCSV(csv_path, relative_path, source_notebook_path):
 directivePrefix = '..'
 
 def processGradedProblems(csv_path, relative_path, problems_path, output_path):
+    print(csv_path, relative_path, problems_path, output_path)
     student_grades = {}
     full_problems_path = os.path.join(relative_path, problems_path)
     problems_files = os.listdir(full_problems_path)
@@ -136,7 +286,7 @@ def processGradedProblems(csv_path, relative_path, problems_path, output_path):
         problem_id = problem_file.split(".")[0]
         for cell in nb.cells:
             try:
-                directive,source = splitDirective(cell['cell_type'], cell['source'])
+                directive,source = splitDirective(cell['cell_type'], cell['source'].strip())
             except Exception as e:
                 print('problem in file {}'.format(problem_file))
                 print(e)
@@ -174,6 +324,7 @@ def processGradedProblems(csv_path, relative_path, problems_path, output_path):
                         student_grades[student]['problems'][problem_id]['comments'] = source.strip()
     output_rows = []
     full_csv_path = os.path.join(relative_path, csv_path)
+    problem_issues = {}
     with open(full_csv_path) as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
@@ -199,15 +350,25 @@ def processGradedProblems(csv_path, relative_path, problems_path, output_path):
                                 feedback.append('Problem {}: {} points'.format(index, gradeValue))
                             feedback.append('')
                         else:
-                            print('No grade for {} (problem {})'.format(sid, problem))
+                            if problem not in problem_issues:
+                                problem_issues[problem] = []
+                            problem_issues[problem].append('Could not parse grade for {}'.format(sid, problem))
                     else:
                         if index > 0 and index <= 23:
-                            print('Missing grade for {} for problem {}'.format(sid, problem))
+                            if problem not in problem_issues:
+                                problem_issues[problem] = []
+                            problem_issues[problem].append('Could not find feedback for {}'.format(sid, problem))
+                            # if problem != '348cb33d-a7e9-47dd-b10b-f36f74abf078':
+                                # print('Missing grade for {} for problem {}'.format(sid, problem))
                 output_rows.append({
                     'uniquename': sid,
                     'grade': overallGrade,
                     'feedback': '\n'.join(feedback)
                 })
+    for problem, issues in problem_issues.items():
+        print('PROBLEM {}:'.format(problem))
+        print('\n'.join(sorted(issues)))
+        print('\n\n')
     output_rows.sort(key = lambda d: d['uniquename'])
     full_output_path = os.path.join(relative_path, output_path)
 
@@ -227,82 +388,3 @@ def processGradedProblems(csv_path, relative_path, problems_path, output_path):
     #     if m:
     #         m = m[0]
     #         os.rename(fullpath, os.path.join(rp, '{}_final_exam.ipynb'.format(m)))
-
-class ExamDirectiveType(Enum):
-    ALWAYS_INCLUDE = '*'
-    PROBLEM = 'problem'
-    TEST = 'test'
-    EXAMS = 'exams'
-    SOLUTION = 'solution'
-    GRADE='grade'
-    COMMENTS='comments'
-
-def splitDirective(cellType, source):
-    if cellType == 'markdown':
-        if source[0:len(directivePrefix)] == directivePrefix:
-            lines = source.splitlines()
-            directive = parseDirective(lines[0].strip())
-
-            newSource = os.linesep.join(lines[1:]).lstrip()
-            return (directive, newSource)
-    elif cellType == 'code':
-        if source[0:len(directivePrefix)+1] == '#'+directivePrefix:
-            lines = source.splitlines()
-            directive = parseDirective(lines[0][1:].strip())
-
-            newSource = os.linesep.join(lines[1:]).lstrip()
-            return (directive, newSource)
-
-
-    return (False, source)
-def parseDirective(fullDirective):
-    directive = fullDirective[len(directivePrefix):]
-    splitDirective = directive.split()
-
-    if splitDirective[0] == '*':
-        return {
-            'type': ExamDirectiveType.ALWAYS_INCLUDE
-        }
-    elif splitDirective[0].lower() == 'test':
-        visible = True
-        if len(splitDirective) >= 2:
-            visible = splitDirective[1].lower() != 'hidden'
-
-        return {
-            'type': ExamDirectiveType.TEST,
-            'visible': visible
-        }
-    elif splitDirective[0].lower() == 'problem':
-        directiveType = ExamDirectiveType.PROBLEM
-
-        [problemGroup, problemID] = splitDirective[1].split('.')
-        if len(splitDirective) >= 3:
-            points = int(splitDirective[2])
-        else:
-            points = False
-        return {
-            'type': ExamDirectiveType.PROBLEM,
-            'group': problemGroup,
-            'id': problemID,
-            'points': points
-        }
-    elif splitDirective[0].lower() == 'exams':
-        return {
-            'type': ExamDirectiveType.EXAMS
-        }
-    elif splitDirective[0].lower() == 'solution':
-        return {
-            'type': ExamDirectiveType.SOLUTION
-        }
-    elif splitDirective[0].lower() == 'grade':
-        return {
-            'type': ExamDirectiveType.GRADE,
-            'student-id': splitDirective[1]
-        }
-    elif splitDirective[0].lower() == 'comments':
-        return {
-            'type': ExamDirectiveType.COMMENTS,
-            'student-id': splitDirective[1]
-        }
-    else:
-        raise ValueError('Unknown directive "{}"'.format(splitDirective[0]))
