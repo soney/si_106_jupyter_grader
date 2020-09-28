@@ -1,7 +1,19 @@
 import argparse
 import generateGradeableExams
+import compileGrades
 import os
 import csv
+
+def str2bool(v = False):
+    print(v)
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def getAllFiles(paths, desiredExtensions=['.ipynb']):
     result = []
@@ -34,11 +46,16 @@ parser.add_argument('--problems', '-p', dest='problems', help='Path to the probl
 parser.add_argument('--output', '-o', dest='output', help='Path to grades output')
 parser.add_argument('--ids', '-id', dest='student_ids', help='The path to the IDs')
 parser.add_argument('--source', '-source', dest='source_path', help='The path to the source notebook')
+parser.add_argument('--grade', '-g', dest='grade', action='store_true', help='Grade')
 
+parser.set_defaults(grade=False)
 args = parser.parse_args()
-
 # src.readNotebooks(args.ipynb_path)
-if args.problems:
+
+if args.grade:
+    gradedFiles = getAllFiles(args.ipynb_path)
+    compileGrades.processGradedProblems(gradedFiles, args.source_path, args.output)
+elif args.problems:
     src.processGradedProblems(args.csv_path, args.relative_path, args.problems, args.output)
 elif args.csv_path:
     src.processCSV(args.csv_path, args.relative_path, args.ipynb_path[0])

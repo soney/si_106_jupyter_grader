@@ -15,20 +15,24 @@ class ExamDirectiveType(Enum):
 
 def splitDirective(cellType, source):
     if cellType == 'markdown':
-        if source[0:len(directivePrefix)] == directivePrefix:
-            lines = source.splitlines()
-            directive = parseDirective(lines[0].strip())
-
-            newSource = os.linesep.join(lines[1:]).lstrip()
-            return (directive, newSource)
+        if (source[0:len(directivePrefix)] == directivePrefix) and source[len(directivePrefix)].strip():
+            try:
+                lines = source.splitlines()
+                directive = parseDirective(lines[0].strip())
+                newSource = os.linesep.join(lines[1:]).lstrip()
+                return (directive, newSource)
+            except Exception as e:
+                print(e)
     elif cellType == 'code':
-        if source[0:len(directivePrefix)+1] == '#'+directivePrefix:
-            lines = source.splitlines()
-            directive = parseDirective(lines[0][1:].strip())
+        if (source[0:len(directivePrefix)+1] == '#'+directivePrefix) and source[len(directivePrefix)+1].strip():
+            try:
+                lines = source.splitlines()
+                directive = parseDirective(lines[0][1:].strip())
 
-            newSource = os.linesep.join(lines[1:]).lstrip()
-            return (directive, newSource)
-
+                newSource = os.linesep.join(lines[1:]).lstrip()
+                return (directive, newSource)
+            except Exception as e:
+                print(e)
 
     return (False, source)
 
@@ -80,11 +84,13 @@ def parseDirective(fullDirective):
         }
     elif splitDirective[0].lower() == 'grade':
         return {
-            'type': ExamDirectiveType.GRADE
+            'type': ExamDirectiveType.GRADE,
+            'student-id': splitDirective[1].strip()
         }
     elif splitDirective[0].lower() == 'comments':
         return {
-            'type': ExamDirectiveType.COMMENTS
+            'type': ExamDirectiveType.COMMENTS,
+            'student-id': splitDirective[1].strip()
         }
     else:
         raise ValueError('Unknown directive "{}"'.format(splitDirective[0]))
