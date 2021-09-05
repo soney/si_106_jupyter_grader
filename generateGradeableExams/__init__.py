@@ -4,7 +4,7 @@ import csv
 import pathlib
 import nbformat
 from nbclient import NotebookClient
-from nbclient.exceptions import CellExecutionError
+from nbclient.exceptions import CellExecutionError, CellTimeoutError, DeadKernelError
 from enum import Enum
 import uuid
 from parseExamDirective import ExamDirectiveType, splitDirective, parseDirective
@@ -18,6 +18,10 @@ def handleSubmissions(filenames, students, source_path, output_path):
 
         submissionNotebook = getNotebook(filename)
         problemIDs = getProblemIDs(submissionNotebook)
+        if problemIDs == None:
+            print(f'{studentID} is missing problem IDs in {filename}')
+            continue
+        
 
         for problemID in problemIDs:
             if problemID not in allProblems:
@@ -67,7 +71,7 @@ def handleSubmissions(filenames, students, source_path, output_path):
         print('Wrote {}'.format(fullNotebookPath))
     
 def autoGradeTestedCells(nb):
-    client = NotebookClient(nb, timeout=600, kernel_name='python3')
+    client = NotebookClient(nb, timeout=10, kernel_name='python3')
     client.setup_kernel()
     failedTests = {}
     passedAllTests = {}
@@ -77,6 +81,7 @@ def autoGradeTestedCells(nb):
         while index < len(nb.cells):
             cell = nb.cells[index]
             directive, source = splitDirective(cell['cell_type'], cell['source'])
+            print(source)
             metadata = cell['metadata']
             studentID = metadata['studentID'] if ('studentID' in metadata) else None
             isTest = hasDirectiveType(cell, ExamDirectiveType.TEST)
@@ -89,6 +94,14 @@ def autoGradeTestedCells(nb):
                     if isTest:
                         failedTest = True
                     pass
+                except CellTimeoutError as e:
+                    failedTest = True
+                    pass
+                except DeadKernelError:
+                    failedTest = True
+                    client.setup_kernel()
+                    pass
+
 
                     # print(e)
             if isTest:
@@ -205,7 +218,10 @@ def getNotebookProblemCells(problemID, notebook, allProblemIDs, isSourceNotebook
 
 
 def getProblemIDs(notebook):
-    return notebook['metadata']['exam_gen_problems']
+    if 'exam_gen_problems' in notebook['metadata']:
+        return notebook['metadata']['exam_gen_problems']
+    else:
+        return None
 
 def readNotebooks(paths):
     for path in paths:

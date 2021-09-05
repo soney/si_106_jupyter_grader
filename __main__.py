@@ -47,6 +47,7 @@ parser.add_argument('--output', '-o', dest='output', help='Path to grades output
 parser.add_argument('--ids', '-id', dest='student_ids', help='The path to the IDs')
 parser.add_argument('--source', '-source', dest='source_path', help='The path to the source notebook')
 parser.add_argument('--grade', '-g', dest='grade', action='store_true', help='Grade')
+parser.add_argument('--exams', '-e', dest='exams', help='Exams')
 
 parser.set_defaults(grade=False)
 args = parser.parse_args()
@@ -54,7 +55,7 @@ args = parser.parse_args()
 
 if args.grade:
     gradedFiles = getAllFiles(args.ipynb_path)
-    compileGrades.processGradedProblems(gradedFiles, args.source_path, args.output)
+    compileGrades.processGradedProblems(gradedFiles, args.source_path, args.output, args.exams)
 elif args.problems:
     src.processGradedProblems(args.csv_path, args.relative_path, args.problems, args.output)
 elif args.csv_path:
@@ -64,4 +65,5 @@ else:
     with open(args.student_ids) as studentIDCSVFile:
         reader = csv.DictReader(studentIDCSVFile)
         studentIDs = { row['ID']: row for row in reader}
+    # print(studentIDs['568345'])
     generateGradeableExams.handleSubmissions(filenameByStudentID, studentIDs, args.source_path, os.path.abspath(args.output))

@@ -22,6 +22,7 @@ def splitDirective(cellType, source):
                 newSource = os.linesep.join(lines[1:]).lstrip()
                 return (directive, newSource)
             except Exception as e:
+                print('Error splitting directive')
                 print(e)
     elif cellType == 'code':
         if (source[0:len(directivePrefix)+1] == '#'+directivePrefix) and source[len(directivePrefix)+1].strip():
