@@ -23,7 +23,11 @@ def processGradedFile(path):
         if 'studentID' in metadata:
             studentID = metadata['studentID']
         
-        if hasDirectiveType(cell, ExamDirectiveType.GRADE):
+        try:
+            hasGradeDirective = hasDirectiveType(cell, ExamDirectiveType.GRADE)
+        except:
+            print(f'Error in {path}')
+        if hasGradeDirective:
             directive,source = splitDirective(cell['cell_type'], cell['source'].strip())
             student = directive['student-id'].strip()
 
@@ -136,7 +140,7 @@ def processGradedProblems(gradedFiles, source_path, output_path, gen_exams_path)
         comments_dict = {}
         ignore = []
         # ignore = ['90383b9e-29b3-46d2-91bb-6f781c2df91e', 'd2255010-55f8-42da-808f-4ac3f9a9e146']
-        ignore = ['709a114b-d1db-4ce7-b701-3c3443e9aa2d', '2fcbaa22-600e-4fe4-848d-e62082df7c2b']
+        # ignore = ['709a114b-d1db-4ce7-b701-3c3443e9aa2d', '2fcbaa22-600e-4fe4-848d-e62082df7c2b']
 
         problem_sequence = [item for item in getProblemSequence(student, source_path, gen_exams_path) if item not in ignore]
         # if problem_sequence == ['90383b9e-29b3-46d2-91bb-6f781c2df91e', 'bbb7551e-17a4-43da-99a5-457c2ccdf0ae', 'c476125a-3c48-4058-95cb-59c8254ac106', '514899c1-5e4c-49dc-b328-c98dd91f9538', 'ce22c375-175f-498b-9cef-3b86d45591df', 'd373a6e4-9ae7-4f48-822a-8ec1bcedc926', 'c5aefa83-9d27-4460-9243-a9d638ef925a', '3d8a29ce-1dbd-4e8b-a218-8dcc3cf32833', 'ccacacdf-11c6-41b5-b233-a01287722fe8', '520a5ad4-675e-46dc-a874-1fad32527896', 'ff8be2c2-e876-4d3f-9cf6-e8679d9a209e', '35f7106b-d513-4bca-8bff-852de6b78ad7', '0942bb0a-48ab-40dc-950d-5a0d7df64223', '671aa3f0-08a9-4be0-b26e-16fc69c89936', '641f0a8e-aafc-4816-b270-d4221e653ef5', '72648c15-b8a6-4b9f-ac5b-a0816ff6b5b0', '6c11805d-5bb0-4a0e-85dd-a7a7fe6b0173', 'e52a06eb-abf0-4a54-b3d2-07d56365f2da']:
@@ -218,7 +222,7 @@ def processGradedProblems(gradedFiles, source_path, output_path, gen_exams_path)
             print('\n'.join(comments))
             print('\n'*2)
     
-    with open(output_path, 'w') as csvfile:
+    with open(output_path, 'w', newline='\n') as csvfile:
         fieldnames=['uniquename', 'grade', 'feedback']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -226,7 +230,7 @@ def processGradedProblems(gradedFiles, source_path, output_path, gen_exams_path)
             d = {
                 'uniquename': student,
                 'grade': grade_dict['score'],
-                'feedback': grade_dict['comments']
+                'feedback': 'Please note: I did not necessarily grade any part of this assignment. If you have a regrade request, please submit it through the form on Canvas.\n\n' +grade_dict['comments']
             }
             writer.writerow(d)
             # print(comments)
