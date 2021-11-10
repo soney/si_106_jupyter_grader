@@ -34,7 +34,7 @@ def processGradedFile(path):
             if source == 'TODO':
                 continue
             
-            if source[-1] == '%':
+            if len(source)>0 and source[-1] == '%':
                 source = source[:-1]
 
             try:
@@ -158,6 +158,9 @@ def processGradedProblems(gradedFiles, source_path, output_path, gen_exams_path)
                     'unparsable_grade': []
                 } 
         for problem_id, student_grade_dict in problem_dict.items():
+            if problem_id not in problem_values:
+                print(f'Could not find problem with id {problem_id}')
+                continue
             problem_value = problem_values[problem_id]
             if 'grade' in student_grade_dict:
                 grade = problem_value * (student_grade_dict['grade']/100)
